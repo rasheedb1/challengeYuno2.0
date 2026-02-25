@@ -1,5 +1,5 @@
 /**
- * Smart Payment Router — Dashboard
+ * Ritmo Smart Payment Router — Dashboard
  * Connects via SSE and drives all UI updates.
  */
 
@@ -10,6 +10,10 @@ let processorDegraded = {};   // { id: bool }
 let processorOverride = {};   // { id: bool|null }
 let healthMap = {};           // { id: ProcessorHealth }
 const MAX_FEED_ITEMS = 50;
+
+// ── Auth rate trend chart state ────────────────────────────────────────────────
+const TREND_MAX_POINTS = 60;
+const trendData = []; // array of auth rate values (0–1)
 
 // ── SSE connection ────────────────────────────────────────────────────────────
 function connectSSE() {
@@ -96,7 +100,7 @@ function createProcessorCard(processor) {
   const scoreEl = document.createElement('div');
   scoreEl.className = 'card-score';
   scoreEl.id = `score-${safeId}`;
-  scoreEl.textContent = `Score: 100 · $${(processor.costPerTransaction / 100).toFixed(2)}/tx`;
+  scoreEl.textContent = `Score: 100 · ${(processor.costPerTransaction / 100).toFixed(2)}% fee`;
 
   // ── Body ──
   const body = document.createElement('div');
@@ -237,7 +241,7 @@ function updateProcessorCard(h) {
   const scoreEl = document.getElementById(`score-${safeId}`);
   if (scoreEl) {
     const cfg = processorConfigs.find(p => p.id === h.processorId);
-    const cost = cfg ? `$${(cfg.costPerTransaction / 100).toFixed(2)}/tx` : '';
+    const cost = cfg ? `${(cfg.costPerTransaction / 100).toFixed(2)}% fee` : '';
     scoreEl.textContent = `Score: ${h.score} · ${cost}`;
   }
 
@@ -339,15 +343,20 @@ function prependTransaction(tx, animate) {
   statusEl.className = `feed-status ${tx.status}`;
   statusEl.textContent = capitalize(tx.status);
 
-  // Amount + cost saved
+  // Amount + cost saved tag
   const amountWrap = document.createElement('div');
   amountWrap.className = 'feed-amount';
-  const amountText = document.createTextNode(`$${(tx.amount / 100).toFixed(2)} `);
+  const amountText = document.createTextNode(`$${(tx.amount / 100).toFixed(2)}`);
   amountWrap.appendChild(amountText);
-  if (tx.costSaved > 0) {
+
+  // costSavedBps: savings vs the most expensive processor in basis points
+  const costSavedUsd = tx.costSavedBps > 0
+    ? (tx.costSavedBps / 10000) * (tx.amount / 100)
+    : 0;
+  if (costSavedUsd > 0.005) {
     const tag = document.createElement('span');
     tag.className = 'cost-saved-tag';
-    tag.textContent = `-${(tx.costSaved / 100).toFixed(0)}¢`;
+    tag.textContent = `−$${costSavedUsd.toFixed(2)}`;
     amountWrap.appendChild(tag);
   }
 
@@ -380,14 +389,71 @@ function prependTransaction(tx, animate) {
 function handleMetrics(metrics) {
   setText('m-total', metrics.totalTransactions.toLocaleString());
 
-  const successRate = metrics.totalTransactions > 0
-    ? ((metrics.successfulTransactions / metrics.totalTransactions) * 100).toFixed(1) + '%'
+  const authRateStr = metrics.totalTransactions > 0
+    ? (metrics.authRate * 100).toFixed(1) + '%'
     : '—';
-  setText('m-success-rate', successRate);
-  setText('m-failed',       metrics.failedTransactions.toLocaleString());
-  setText('m-cost-saved',   `$${(metrics.totalCostSaved / 100).toFixed(2)}`);
-  setText('m-latency',      `${metrics.avgLatencyMs}ms`);
-  setText('m-tps',          metrics.transactionsPerSecond.toFixed(1));
+  setText('m-auth-rate', authRateStr);
+  setText('m-failed',    metrics.failedTransactions.toLocaleString());
+  setText('m-cost-saved', `$${metrics.totalCostSavedUsd.toFixed(2)}`);
+  setText('m-latency',   `${metrics.avgLatencyMs}ms`);
+  setText('m-tps',       metrics.transactionsPerSecond.toFixed(1));
+
+  pushTrendPoint(metrics.authRate);
+}
+
+// ── Auth rate trend chart ─────────────────────────────────────────────────────
+/**
+ * SVG coordinate system (viewBox 0 0 500 120):
+ *   Chart left=30, top=8, right=492, bottom=100
+ *   Width=462, Height=92
+ *   85% reference: y = 8 + (1-0.85)*92 = 21.8 ≈ 22  (matches the static SVG line)
+ */
+const CHART = { LEFT: 30, TOP: 8, RIGHT: 492, BOTTOM: 100 };
+
+function pushTrendPoint(authRate) {
+  trendData.push(authRate);
+  if (trendData.length > TREND_MAX_POINTS) trendData.shift();
+  renderTrendChart();
+}
+
+function renderTrendChart() {
+  const svg = document.getElementById('trend-svg');
+  if (!svg || trendData.length < 2) return;
+
+  const W = CHART.RIGHT - CHART.LEFT;   // 462
+  const H = CHART.BOTTOM - CHART.TOP;   // 92
+
+  const xOf = (i) => CHART.LEFT + (i / (TREND_MAX_POINTS - 1)) * W;
+  const yOf = (v) => CHART.TOP  + (1 - Math.max(0, Math.min(1, v))) * H;
+
+  const pts = trendData.map((v, i) => `${xOf(i)},${yOf(v)}`).join(' ');
+  const x0  = xOf(0);
+  const xN  = xOf(trendData.length - 1);
+
+  // Remove previous dynamic elements
+  const prevArea = document.getElementById('trend-area');
+  const prevLine = document.getElementById('trend-line');
+  if (prevArea) prevArea.remove();
+  if (prevLine) prevLine.remove();
+
+  // Area fill (semi-transparent green below the line)
+  const area = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+  area.id = 'trend-area';
+  area.setAttribute('points', `${x0},${CHART.BOTTOM} ${pts} ${xN},${CHART.BOTTOM}`);
+  area.setAttribute('fill', 'rgba(16,185,129,0.12)');
+
+  // Auth rate line
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+  line.id = 'trend-line';
+  line.setAttribute('points', pts);
+  line.setAttribute('fill', 'none');
+  line.setAttribute('stroke', '#10b981');
+  line.setAttribute('stroke-width', '1.5');
+  line.setAttribute('stroke-linejoin', 'round');
+  line.setAttribute('stroke-linecap', 'round');
+
+  svg.appendChild(area);
+  svg.appendChild(line);
 }
 
 // ── Threshold panel ───────────────────────────────────────────────────────────

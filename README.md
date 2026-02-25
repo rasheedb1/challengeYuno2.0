@@ -1,140 +1,159 @@
 # Ritmo — Smart Payment Router
 
-Real-time payment processor routing for Latin American ticketing platforms.
-Routes transactions intelligently across 3 payment processors based on live health metrics.
+Real-time payment processor routing for the Festival Rush scenario.
+Automatically shifts traffic across three processors based on live health metrics —
+keeping auth rates high and costs low even when a processor degrades under load.
 
 ---
 
 ## Quick Start (< 2 minutes)
 
-### 1. Install dependencies
-
 ```bash
-# Backend
-cd backend && npm install
-
-# Frontend (new terminal)
-cd frontend && npm install
+npm install
+npm run build
+npm start
+# → http://localhost:3000
 ```
 
-### 2. Start the backend
+Or use hot-reload during development:
 
 ```bash
-cd backend
 npm run dev
-# → http://localhost:3001
+# → http://localhost:3000
 ```
-
-### 3. Start the frontend
-
-```bash
-cd frontend
-npm run dev
-# → http://localhost:5173
-```
-
-### 4. Open the dashboard
-
-Navigate to **http://localhost:5173**
 
 ---
 
 ## Live Demo Walkthrough
 
 ### Normal traffic
-1. Click **▶ Start Simulation** — transactions begin flowing at ~15/sec
-2. All 3 processors show **green / Healthy**
-3. Auth rate stabilises around **85%**
+1. Open **http://localhost:3000**
+2. Click **▶ Start Simulation** — ~3 transactions/second start flowing
+3. All 3 processor cards show **green / Healthy**, auth rate stabilises around **85%**
+4. The Auth Rate chart fills in over the first ~60 seconds
 
-### Trigger degradation
-1. Click **Degrade Veloce** (or any processor) in the Control Panel
-2. Within ~10 seconds the processor card turns **yellow → red**
-3. Watch the router shift traffic away from the degraded processor automatically
-4. The transaction feed shows increased error counts on that processor
+### Trigger the Festival Rush failure
+1. Click **Degrade** on the **Veloce Card Gateway** card
+2. Within **5–8 seconds** the card turns yellow (Degraded), then red (Down)
+3. Watch the router shift traffic away automatically — Veloce's share drops to near zero
+4. The Auth Rate chart holds steady despite the failure (other processors absorb the load)
+5. The transaction feed shows a spike of `timeout` and `error` entries on Veloce
 
 ### Recovery
-1. Click **Recover [Processor]**
-2. Health improves as the sliding window fills with clean data (~15–30s)
-3. Router resumes sending traffic once status returns to **Healthy**
+1. Click **Restore** on the Veloce card
+2. Health improves as the 15-second sliding window refills with clean data (~15–30s)
+3. The router resumes sending traffic once the status returns to **Healthy**
 
 ### Manual override (stretch goal)
-- The **Disable** button on each processor card forces the router to skip it entirely
-- Re-click **Enable** to restore it
+- The **Override** toggle on each card force-enables a processor regardless of health
+- Useful for keeping a degraded processor in the pool during partial failures
+- Toggle off to return to automatic routing
+
+### Configurable thresholds (stretch goal)
+- Click **Edit** next to "Threshold Configuration" to change the detection sensitivity
+- Lower the degraded threshold to catch failures earlier; raise it for noisy environments
 
 ---
 
 ## Architecture
 
-### Smart Routing (`backend/src/smartRouter.ts`)
+### Smart Routing (`src/smartRouter.ts`)
 
-Each processor receives a score computed per transaction:
+Weighted-random selection over all available processors. Each processor receives a score:
 
 ```
-score = (successRate × 0.7) − (avgResponseTimeMs / 10 000 × 0.3)
+score = successRate × 70  +  latencyScore × 30        (0–100)
+latencyScore = max(0, 30 × (1 − avgLatencyMs / 3000))
 ```
 
-| Status   | Multiplier | Effect                             |
-|----------|-----------|------------------------------------|
-| healthy  | 1.0       | Full score                         |
-| degraded | 0.4       | Heavily penalised — backup only    |
-| down     | —         | Excluded entirely                  |
+A **cost-aware bonus** adds up to +5 points for cheaper processors, acting as a
+tiebreaker when health is equal:
 
-**Cost-aware tiebreaker**: when scores are within 0.01 of each other,
-the processor with the lower fee wins (PagoRapido at 1.8%).
-
-### Health Tracking (`backend/src/healthTracker.ts`)
-
-60-second sliding window per processor.
-
-| Condition                           | Status     |
-|-------------------------------------|------------|
-| errorRate ≥ 30% OR latency ≥ 5 000ms | `down`   |
-| errorRate ≥ 10% OR latency ≥ 2 000ms | `degraded`|
-| otherwise                           | `healthy`  |
-
-Thresholds are configurable at runtime via `POST /api/config/thresholds`.
-
-### Real-time Updates
-
-SSE stream at `/api/events` pushes a JSON snapshot every **500ms**:
-```json
-{
-  "health": [...],
-  "recentTransactions": [...],
-  "metrics": { ... }
-}
 ```
+bonus = round( (MAX_FEE − processorFee) / MAX_FEE × 5 )
+```
+
+PagoRapido (1.80%) receives the full +5 bonus vs Meridian (2.50%), so when all
+processors are equally healthy the router naturally routes more volume to the cheapest one.
+
+**Down processors** are excluded entirely.
+**Degraded processors** remain in the candidate pool but receive a near-zero score,
+so they act as a last-resort backup only.
+
+### Health Tracking (`src/healthTracker.ts`)
+
+15-second sliding window per processor, updated on every transaction:
+
+| Success rate    | Status     |
+|-----------------|------------|
+| ≥ 92%           | `healthy`  |
+| 75% – 92%       | `degraded` |
+| < 75%           | `down`     |
+
+**Fast detection**: the last 8 events are also evaluated independently.
+The *worse* of the full-window rate and the recent-sample rate is used.
+A sudden burst of failures is detected within **5–8 seconds** rather than
+waiting for the full 15-second window to roll over.
+
+**Statistical guard**: status thresholds are not applied until at least 6 events
+are in the window, preventing false positives on cold-start noise.
+
+Thresholds are configurable at runtime via the dashboard or `PUT /api/thresholds`.
+
+### Degradation Scenario
+
+When a processor is degraded (simulating a festival-hour overload):
+
+| Parameter         | Normal  | Degraded               |
+|-------------------|---------|------------------------|
+| Error rate        | 3%      | 35%                    |
+| Timeout rate      | 2%      | 40% (3s cap per tx)    |
+| Latency multiplier| 1×      | 40× (120ms → ~5–7s)   |
+
+This matches the challenge spec of 30–40% error rates and 5–10 second response times.
 
 ### Processors
 
-| ID        | Name                  | Fee   |
-|-----------|-----------------------|-------|
-| veloce    | Veloce Card Gateway   | 2.1%  |
-| pagorp    | PagoRapido            | 1.8%  |
-| meridian  | Meridian Processor    | 2.5%  |
+| ID       | Name                  | Fee    | Base Latency |
+|----------|-----------------------|--------|--------------|
+| veloce   | Veloce Card Gateway   | 2.10%  | 120ms        |
+| pagorp   | PagoRapido            | 1.80%  | 180ms        |
+| meridian | Meridian Processor    | 2.50%  | 220ms        |
+
+### Real-time Updates
+
+SSE stream at `/api/events` sends a message on every transaction event, plus a full
+initial snapshot on connection:
+
+```
+event types: init | health | transaction | metrics | simulation
+```
+
+The dashboard receives push updates with zero polling — no intervals, no setTimeouts
+for data fetching.
 
 ---
 
 ## API Reference
 
-| Method | Path                                   | Description                    |
-|--------|----------------------------------------|--------------------------------|
-| GET    | `/api/health`                          | All processor health statuses  |
-| GET    | `/api/transactions`                    | Last 100 transactions          |
-| GET    | `/api/metrics`                         | Aggregated metrics             |
-| GET    | `/api/events`                          | SSE stream (500ms interval)    |
-| POST   | `/api/simulate/start`                  | Start traffic simulation       |
-| POST   | `/api/simulate/stop`                   | Stop simulation                |
-| POST   | `/api/simulate/degrade/:processorId`   | Trigger processor degradation  |
-| POST   | `/api/simulate/recover/:processorId`   | Recover processor              |
-| POST   | `/api/processors/:id/toggle`           | Enable/disable processor       |
-| POST   | `/api/config/thresholds`               | Update health thresholds       |
+| Method | Path                            | Description                                  |
+|--------|---------------------------------|----------------------------------------------|
+| GET    | `/api/events`                   | SSE stream (event-driven, fires per tx)      |
+| GET    | `/api/health`                   | All processor health objects                 |
+| GET    | `/api/thresholds`               | Current threshold configuration              |
+| PUT    | `/api/thresholds`               | Update thresholds at runtime                 |
+| POST   | `/api/simulation/start`         | Begin transaction simulation                 |
+| POST   | `/api/simulation/stop`          | Halt simulation                              |
+| POST   | `/api/processor/:id/degrade`    | Inject failure (35% errors, 40× latency)     |
+| POST   | `/api/processor/:id/restore`    | Restore processor to healthy baseline        |
+| POST   | `/api/processor/:id/override`   | `{ enabled: true|null }` — force-enable/auto |
+| GET    | `/api/processor/:id/status`     | Single-processor health + override state     |
 
 ---
 
 ## Tech Stack
 
-- **Backend**: Node.js · Express · TypeScript · tsx (hot reload)
-- **Frontend**: React 18 · TypeScript · Vite
-- **Real-time**: Server-Sent Events (SSE)
+- **Runtime**: Node.js + TypeScript (`tsc` → `dist/`)
+- **Backend**: Express, Server-Sent Events
+- **Frontend**: Vanilla JS + SVG (no framework, no bundler required)
 - **Data**: In-memory (no database required)

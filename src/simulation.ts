@@ -10,9 +10,13 @@ import {
   PROCESSOR_CONFIGS,
 } from './processors';
 
-const TX_INTERVAL_MS = 350; // ~3 transactions per second
+const TX_INTERVAL_MS = 350; // ~3 transactions per second, realistic load simulation
 const MAX_STORED_TRANSACTIONS = 100;
 const TPS_WINDOW_MS = 5_000;
+
+// Ticket price range: $10–$300 USD
+const MIN_AMOUNT_CENTS = 1000;
+const MAX_AMOUNT_CENTS = 30000;
 
 export class Simulation extends EventEmitter {
   private running = false;
@@ -53,7 +57,7 @@ export class Simulation extends EventEmitter {
   }
 
   getRecentTransactions(): Transaction[] {
-    return this.recentTransactions.slice(0, 20);
+    return this.recentTransactions.slice(0, 50);
   }
 
   getMetrics(): Metrics {
@@ -72,8 +76,12 @@ export class Simulation extends EventEmitter {
     const result = await processTransaction(processorId, amount);
     this.tracker.recordEvent(processorId, result.status, result.latencyMs);
 
-    const processorCost = PROCESSOR_CONFIGS.find((p) => p.id === processorId)?.costPerTransaction ?? 0;
-    const costSaved = MAX_COST - processorCost;
+    const config = PROCESSOR_CONFIGS.find((p) => p.id === processorId);
+    const feeBps = config?.costPerTransaction ?? 0;
+    const costSavedBps = MAX_COST - feeBps;
+
+    // Cost saved in USD = (savedBps / 10000) * amount_in_cents / 100
+    const costSavedUsd = (costSavedBps / 10_000) * (amount / 100);
 
     const tx: Transaction = {
       id: randomUUID(),
@@ -82,11 +90,12 @@ export class Simulation extends EventEmitter {
       status: result.status,
       latencyMs: result.latencyMs,
       timestamp: Date.now(),
-      costSaved,
+      feeBps,
+      costSavedBps,
     };
 
     this.storeTransaction(tx);
-    this.updateMetrics(tx);
+    this.updateMetrics(tx, costSavedUsd);
 
     this.emit('transaction', tx);
     this.emit('health', this.tracker.getAllHealth(PROCESSOR_IDS));
@@ -100,7 +109,7 @@ export class Simulation extends EventEmitter {
     }
   }
 
-  private updateMetrics(tx: Transaction): void {
+  private updateMetrics(tx: Transaction, costSavedUsd: number): void {
     this.metrics.totalTransactions++;
 
     if (tx.status === 'success') {
@@ -109,7 +118,8 @@ export class Simulation extends EventEmitter {
       this.metrics.failedTransactions++;
     }
 
-    this.metrics.totalCostSaved += tx.costSaved;
+    this.metrics.authRate = this.metrics.successfulTransactions / this.metrics.totalTransactions;
+    this.metrics.totalCostSavedUsd += costSavedUsd;
 
     // Exponential moving average for latency
     const alpha = 0.1;
@@ -118,7 +128,7 @@ export class Simulation extends EventEmitter {
         ? tx.latencyMs
         : Math.round(this.metrics.avgLatencyMs * (1 - alpha) + tx.latencyMs * alpha);
 
-    // TPS calculation over a rolling 5-second window
+    // TPS over a rolling 5-second window
     const now = Date.now();
     this.tpsWindowCount++;
     if (now - this.tpsWindowStart >= TPS_WINDOW_MS) {
@@ -140,13 +150,13 @@ function emptyMetrics(): Metrics {
     totalTransactions: 0,
     successfulTransactions: 0,
     failedTransactions: 0,
-    totalCostSaved: 0,
+    authRate: 0,
+    totalCostSavedUsd: 0,
     avgLatencyMs: 0,
     transactionsPerSecond: 0,
   };
 }
 
 function randomAmount(): number {
-  // Random amount between $1.00 and $100.00 (in cents)
-  return Math.round(Math.random() * 9900 + 100);
+  return Math.round(Math.random() * (MAX_AMOUNT_CENTS - MIN_AMOUNT_CENTS) + MIN_AMOUNT_CENTS);
 }

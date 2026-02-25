@@ -5,7 +5,7 @@ export type EventType = 'success' | 'error' | 'timeout';
 export interface ProcessorConfig {
   id: string;
   name: string;
-  costPerTransaction: number; // cents
+  costPerTransaction: number; // basis points (÷100 = fee %). e.g. 210 = 2.10%
   baseLatencyMs: number;
 }
 
@@ -30,18 +30,20 @@ export interface ProcessorHealth {
 export interface Transaction {
   id: string;
   processorId: string;
-  amount: number;        // cents
+  amount: number;          // cents (USD)
   status: EventType;
   latencyMs: number;
   timestamp: number;
-  costSaved: number;     // cents vs most expensive processor
+  feeBps: number;          // fee in basis points for this processor
+  costSavedBps: number;    // fee saved vs most expensive processor, in basis points
 }
 
 export interface Metrics {
   totalTransactions: number;
   successfulTransactions: number;
   failedTransactions: number;
-  totalCostSaved: number; // cents
+  authRate: number;           // successfulTransactions / totalTransactions (0–1)
+  totalCostSavedUsd: number;  // total USD saved via cost-aware routing
   avgLatencyMs: number;
   transactionsPerSecond: number;
 }

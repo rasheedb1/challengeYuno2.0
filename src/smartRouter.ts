@@ -1,5 +1,16 @@
-import { ProcessorHealth } from './types';
+import { ProcessorHealth, ProcessorConfig } from './types';
 import { HealthTracker } from './healthTracker';
+import { PROCESSOR_CONFIGS, MAX_COST } from './processors';
+
+/**
+ * Cost-aware score: take the raw health score and add a bonus for cheaper processors.
+ * A processor that costs 20% less than the most expensive gets up to +5 score points.
+ * This means equally-healthy processors will be preferred in order of lowest fee.
+ */
+function applyCostBonus(baseScore: number, config: ProcessorConfig): number {
+  const costFraction = (MAX_COST - config.costPerTransaction) / MAX_COST;
+  return baseScore + Math.round(costFraction * 5);
+}
 
 export class SmartRouter {
   private readonly overrides = new Map<string, boolean>(); // true=force-on, false=force-off
@@ -10,8 +21,9 @@ export class SmartRouter {
   ) {}
 
   /**
-   * Select the healthiest available processor using weighted-random selection.
+   * Select the healthiest available processor using cost-aware weighted-random selection.
    * Down processors are skipped unless manually overridden to enabled.
+   * Among processors with similar health, cheaper ones receive proportionally more traffic.
    * Returns null only when all processors are unavailable.
    */
   selectProcessor(): string | null {
@@ -38,21 +50,25 @@ export class SmartRouter {
 
   /**
    * Weighted-random selection: processors with higher scores receive
-   * proportionally more traffic. This biases toward healthier processors
-   * while still distributing load.
+   * proportionally more traffic. Health (success rate + latency) dominates
+   * the score; cost provides a small tiebreaker for equally-healthy processors.
    */
   private weightedRandomSelect(candidates: ProcessorHealth[]): string {
-    const totalWeight = candidates.reduce((sum, h) => sum + h.score, 0);
+    const weights = candidates.map((h) => {
+      const config = PROCESSOR_CONFIGS.find((c) => c.id === h.processorId);
+      return config ? applyCostBonus(h.score, config) : h.score;
+    });
+
+    const totalWeight = weights.reduce((sum, w) => sum + w, 0);
 
     if (totalWeight === 0) {
-      // All scores are zero — pick uniformly at random
       return candidates[Math.floor(Math.random() * candidates.length)].processorId;
     }
 
     let cursor = Math.random() * totalWeight;
-    for (const candidate of candidates) {
-      cursor -= candidate.score;
-      if (cursor <= 0) return candidate.processorId;
+    for (let i = 0; i < candidates.length; i++) {
+      cursor -= weights[i];
+      if (cursor <= 0) return candidates[i].processorId;
     }
     // Floating-point safety fallback
     return candidates[candidates.length - 1].processorId;
