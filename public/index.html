@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Payment Router</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- ── Header ──────────────────────────────────────────────────────────── -->
+  <header class="header">
+    <div class="header-left">
+      <div class="logo">⚡ Smart Payment Router</div>
+      <span id="sim-status-badge" class="badge badge-idle">Idle</span>
+    </div>
+    <div class="header-right">
+      <button id="btn-start" class="btn btn-primary" onclick="toggleSimulation()">
+        ▶ Start Simulation
+      </button>
+    </div>
+  </header>
+
+  <!-- ── Metrics bar ─────────────────────────────────────────────────────── -->
+  <section class="metrics-bar">
+    <div class="metric">
+      <span class="metric-value" id="m-total">0</span>
+      <span class="metric-label">Transactions</span>
+    </div>
+    <div class="metric">
+      <span class="metric-value metric-green" id="m-success-rate">—</span>
+      <span class="metric-label">Success Rate</span>
+    </div>
+    <div class="metric">
+      <span class="metric-value metric-red" id="m-failed">0</span>
+      <span class="metric-label">Failed</span>
+    </div>
+    <div class="metric">
+      <span class="metric-value metric-blue" id="m-cost-saved">$0.00</span>
+      <span class="metric-label">Cost Saved</span>
+    </div>
+    <div class="metric">
+      <span class="metric-value" id="m-latency">0ms</span>
+      <span class="metric-label">Avg Latency</span>
+    </div>
+    <div class="metric">
+      <span class="metric-value" id="m-tps">0</span>
+      <span class="metric-label">TPS</span>
+    </div>
+  </section>
+
+  <!-- ── Main content ────────────────────────────────────────────────────── -->
+  <main class="main">
+
+    <!-- ── Processor cards ──────────────────────────────────────────────── -->
+    <section class="processors-section">
+      <h2 class="section-title">Payment Processors</h2>
+      <div class="processor-grid" id="processor-grid">
+        <!-- Cards injected by JS -->
+      </div>
+    </section>
+
+    <!-- ── Threshold config panel ───────────────────────────────────────── -->
+    <section class="config-section">
+      <h2 class="section-title">
+        Threshold Configuration
+        <button class="btn btn-sm btn-ghost" onclick="toggleThresholdPanel()">Edit</button>
+      </h2>
+      <div id="threshold-panel" class="threshold-panel hidden">
+        <div class="threshold-row">
+          <label>Window (ms)</label>
+          <input type="number" id="cfg-window" class="cfg-input" value="15000" min="5000" max="60000" step="1000" />
+        </div>
+        <div class="threshold-row">
+          <label>Degraded below (%)</label>
+          <input type="number" id="cfg-degraded" class="cfg-input" value="92" min="50" max="99" step="1" />
+        </div>
+        <div class="threshold-row">
+          <label>Down below (%)</label>
+          <input type="number" id="cfg-down" class="cfg-input" value="75" min="10" max="90" step="1" />
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="saveThresholds()">Save</button>
+        <span id="cfg-saved-msg" class="cfg-saved hidden">✓ Saved</span>
+      </div>
+    </section>
+
+    <!-- ── Transaction feed ─────────────────────────────────────────────── -->
+    <section class="feed-section">
+      <h2 class="section-title">Live Transaction Feed</h2>
+      <div class="feed" id="tx-feed">
+        <div class="feed-empty">Waiting for transactions…</div>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
