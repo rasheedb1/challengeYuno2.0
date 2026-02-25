@@ -11,7 +11,7 @@ const DEFAULT_CONFIG: ThresholdConfig = {
   degradedThreshold: 0.92,  // below 92% → degraded  (baseline ~99%, so plenty of margin)
   downThreshold: 0.75,      // below 75% → down
   recentSampleSize: 8,      // also check last 8 events for rapid degradation
-  minSamples: 8,            // need at least 8 events before downgrading status
+  minSamples: 6,            // need at least 6 events before downgrading status
 };
 
 export class HealthTracker {
