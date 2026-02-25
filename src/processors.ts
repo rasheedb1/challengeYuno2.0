@@ -1,8 +1,7 @@
 import { ProcessorConfig, EventType } from './types';
 
-// Processors use fee percentages converted to flat-rate cents per $50 avg transaction
-// Veloce: 2.1% → ~105¢ | PagoRapido: 1.8% → ~90¢ | Meridian: 2.5% → ~125¢
-// costPerTransaction is stored as basis points (÷100 = %) for cost-aware routing
+// Processors use fee percentages converted to basis points (÷100 = %)
+// Veloce: 2.1% (210 bps) | PagoRapido: 1.8% (180 bps) | Meridian: 2.5% (250 bps)
 export const PROCESSOR_CONFIGS: ProcessorConfig[] = [
   { id: 'veloce',    name: 'Veloce Card Gateway', costPerTransaction: 210, baseLatencyMs: 120 },
   { id: 'pagorp',    name: 'PagoRapido',           costPerTransaction: 180, baseLatencyMs: 180 },
@@ -16,21 +15,22 @@ export const MAX_COST = Math.max(...PROCESSOR_CONFIGS.map((p) => p.costPerTransa
 interface ProcessorState {
   errorRate: number;
   timeoutRate: number;
+  declineRate: number;     // business rejections — unchanged by technical degradation
   latencyMultiplier: number;
   degraded: boolean;
 }
 
-// Healthy baseline: ~85-87% approval, ~8-10% legitimate decline, ~3-5% error/timeout
-// Mirrors the acceptance criteria distribution: 75-85% approved, 8-12% declined, 3-5% errors
+// Healthy baseline: ~82% approved, ~10% declined (business), ~5% error, ~3% timeout
+// Matches acceptance criteria: 75-85% approved, 8-12% declined, 3-5% technical errors
 const processorStates = new Map<string, ProcessorState>([
-  ['veloce',   { degraded: false, errorRate: 0.03, timeoutRate: 0.02, latencyMultiplier: 1 }],
-  ['pagorp',   { degraded: false, errorRate: 0.03, timeoutRate: 0.02, latencyMultiplier: 1 }],
-  ['meridian', { degraded: false, errorRate: 0.03, timeoutRate: 0.02, latencyMultiplier: 1 }],
+  ['veloce',   { degraded: false, errorRate: 0.05, timeoutRate: 0.03, declineRate: 0.10, latencyMultiplier: 1 }],
+  ['pagorp',   { degraded: false, errorRate: 0.05, timeoutRate: 0.03, declineRate: 0.10, latencyMultiplier: 1 }],
+  ['meridian', { degraded: false, errorRate: 0.05, timeoutRate: 0.03, declineRate: 0.10, latencyMultiplier: 1 }],
 ]);
 
-// Degraded state matches the Beats del Sur failure scenario:
-// response times 5-10s (baseLatency × 40 = 120ms × 40 ≈ 4.8s avg),
-// 30-40% error rate (spec requirement), matching the challenge story.
+// Degraded state — Beats del Sur failure scenario:
+// Response times 5-10s (120ms × 40 ≈ 4.8s avg), 30-40% error rate.
+// declineRate stays at 0.10 — business rejections are bank decisions, not processor health.
 export function degradeProcessor(processorId: string): void {
   const state = processorStates.get(processorId);
   if (state) {
@@ -45,8 +45,8 @@ export function restoreProcessor(processorId: string): void {
   const state = processorStates.get(processorId);
   if (state) {
     state.degraded = false;
-    state.errorRate = 0.03;
-    state.timeoutRate = 0.02;
+    state.errorRate = 0.05;
+    state.timeoutRate = 0.03;
     state.latencyMultiplier = 1;
   }
 }
@@ -71,8 +71,7 @@ export async function processTransaction(
     throw new Error(`Unknown processor: ${processorId}`);
   }
 
-  // Unused parameter acknowledged — amount is passed for realism
-  void amount;
+  void amount; // amount is passed for realism; routing could use it for risk scoring
 
   const baseLatency = config.baseLatencyMs * state.latencyMultiplier;
   const jitter = Math.random() * baseLatency * 0.4;
@@ -88,6 +87,12 @@ export async function processTransaction(
   if (rand < state.timeoutRate + state.errorRate) {
     await sleep(latencyMs);
     return { status: 'error', latencyMs };
+  }
+
+  // Declined: legitimate bank/risk rejection — fast response, same latency as approval
+  if (rand < state.timeoutRate + state.errorRate + state.declineRate) {
+    await sleep(latencyMs);
+    return { status: 'declined', latencyMs };
   }
 
   await sleep(latencyMs);

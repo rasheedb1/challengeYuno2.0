@@ -119,6 +119,7 @@ body {
   letter-spacing: 0.5px;
 }
 .metric-green { color: var(--healthy); }
+.metric-amber { color: var(--degraded); }
 .metric-red   { color: var(--down); }
 .metric-blue  { color: var(--blue); }
 
@@ -234,8 +235,9 @@ body {
   transition: width .5s ease;
 }
 .fill-success  { background: var(--healthy); }
+.fill-declined { background: var(--degraded); }
 .fill-error    { background: var(--down); }
-.fill-timeout  { background: var(--degraded); }
+.fill-timeout  { background: #f97316; }
 
 /* Stats grid */
 .stats-grid {
@@ -421,9 +423,10 @@ body {
   animation: slideIn .2s ease;
   border-left: 3px solid transparent;
 }
-.feed-item.success { border-left-color: var(--healthy); }
-.feed-item.error   { border-left-color: var(--down); }
-.feed-item.timeout { border-left-color: var(--degraded); }
+.feed-item.success  { border-left-color: var(--healthy); }
+.feed-item.declined { border-left-color: var(--degraded); }
+.feed-item.error    { border-left-color: var(--down); }
+.feed-item.timeout  { border-left-color: #f97316; }
 
 @keyframes slideIn {
   from { opacity: 0; transform: translateY(-4px); }
@@ -435,9 +438,10 @@ body {
   border-radius: 50%;
   flex-shrink: 0;
 }
-.dot-success { background: var(--healthy); }
-.dot-error   { background: var(--down); }
-.dot-timeout { background: var(--degraded); }
+.dot-success  { background: var(--healthy); }
+.dot-declined { background: var(--degraded); }
+.dot-error    { background: var(--down); }
+.dot-timeout  { background: #f97316; }
 
 .feed-processor {
   font-weight: 600;
@@ -447,10 +451,11 @@ body {
   text-overflow: ellipsis;
   font-size: 11px;
 }
-.feed-status { color: var(--muted); }
-.feed-status.success { color: var(--healthy); }
-.feed-status.error   { color: var(--down); }
-.feed-status.timeout { color: var(--degraded); }
+.feed-status          { color: var(--muted); }
+.feed-status.success  { color: var(--healthy); }
+.feed-status.declined { color: var(--degraded); }
+.feed-status.error    { color: var(--down); }
+.feed-status.timeout  { color: #f97316; }
 .feed-amount  { color: var(--text); font-weight: 600; }
 .feed-latency { color: var(--muted); }
 .feed-time    { color: var(--muted); text-align: right; }

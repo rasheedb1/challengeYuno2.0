@@ -9,11 +9,11 @@ let processorConfigs = [];
 let processorDegraded = {};   // { id: bool }
 let processorOverride = {};   // { id: bool|null }
 let healthMap = {};           // { id: ProcessorHealth }
-const MAX_FEED_ITEMS = 50;
+const MAX_FEED_ITEMS = 100;
 
 // ── Auth rate trend chart state ────────────────────────────────────────────────
 const TREND_MAX_POINTS = 60;
-const trendData = []; // array of auth rate values (0–1)
+const trendData = []; // rolling array of auth rate values (0–1)
 
 // ── SSE connection ────────────────────────────────────────────────────────────
 function connectSSE() {
@@ -57,6 +57,7 @@ function handleInit(payload) {
   setInputValue('cfg-degraded', Math.round(cfg.degradedThreshold * 100));
   setInputValue('cfg-down',     Math.round(cfg.downThreshold * 100));
 
+  // Load seed transactions (newest first from server, reverse to prepend correctly)
   payload.transactions.slice().reverse().forEach(tx => prependTransaction(tx, false));
   handleMetrics(payload.metrics);
   handleSimulation(payload.simulation);
@@ -96,7 +97,7 @@ function createProcessorCard(processor) {
   header.appendChild(nameEl);
   header.appendChild(pill);
 
-  // ── Score line ──
+  // ── Score / fee line ──
   const scoreEl = document.createElement('div');
   scoreEl.className = 'card-score';
   scoreEl.id = `score-${safeId}`;
@@ -106,9 +107,10 @@ function createProcessorCard(processor) {
   const body = document.createElement('div');
   body.className = 'card-body';
 
-  body.appendChild(makeStatRow('Success Rate', `sr-val-${safeId}`, `sr-bar-${safeId}`, 'fill-success'));
-  body.appendChild(makeStatRow('Error Rate',   `er-val-${safeId}`, `er-bar-${safeId}`, 'fill-error'));
-  body.appendChild(makeStatRow('Timeout Rate', `tr-val-${safeId}`, `tr-bar-${safeId}`, 'fill-timeout'));
+  body.appendChild(makeStatRow('Auth Rate (approved)', `sr-val-${safeId}`, `sr-bar-${safeId}`, 'fill-success'));
+  body.appendChild(makeStatRow('Declined',             `dr-val-${safeId}`, `dr-bar-${safeId}`, 'fill-declined'));
+  body.appendChild(makeStatRow('Error Rate',           `er-val-${safeId}`, `er-bar-${safeId}`, 'fill-error'));
+  body.appendChild(makeStatRow('Timeout Rate',         `tr-val-${safeId}`, `tr-bar-${safeId}`, 'fill-timeout'));
 
   const statsGrid = document.createElement('div');
   statsGrid.className = 'stats-grid';
@@ -191,7 +193,7 @@ function makeStatRow(label, valId, barId, fillClass) {
   const barFill = document.createElement('div');
   barFill.className = `progress-fill ${fillClass}`;
   barFill.id = barId;
-  barFill.style.width = barId.startsWith('sr-') ? '100%' : '0%';
+  barFill.style.width = '0%';
 
   barContainer.appendChild(barFill);
   row.appendChild(labelRow);
@@ -246,6 +248,7 @@ function updateProcessorCard(h) {
   }
 
   setPct(`sr-val-${safeId}`, `sr-bar-${safeId}`, h.successRate);
+  setPct(`dr-val-${safeId}`, `dr-bar-${safeId}`, h.declineRate);
   setPct(`er-val-${safeId}`, `er-bar-${safeId}`, h.errorRate);
   setPct(`tr-val-${safeId}`, `tr-bar-${safeId}`, h.timeoutRate);
 
@@ -315,6 +318,7 @@ function handleTransaction(tx) {
 
 /**
  * Build a transaction feed row using DOM API to avoid XSS risks.
+ * Status colours: success=green, declined=amber, error=red, timeout=orange
  */
 function prependTransaction(tx, animate) {
   const feed = document.getElementById('tx-feed');
@@ -338,22 +342,20 @@ function prependTransaction(tx, animate) {
   nameEl.className = 'feed-processor';
   nameEl.textContent = procName;
 
-  // Status
+  // Status label
   const statusEl = document.createElement('div');
   statusEl.className = `feed-status ${tx.status}`;
   statusEl.textContent = capitalize(tx.status);
 
-  // Amount + cost saved tag
+  // Amount + cost-saved tag (only on success — fee only charged on approvals)
   const amountWrap = document.createElement('div');
   amountWrap.className = 'feed-amount';
-  const amountText = document.createTextNode(`$${(tx.amount / 100).toFixed(2)}`);
-  amountWrap.appendChild(amountText);
+  amountWrap.appendChild(document.createTextNode(`$${(tx.amount / 100).toFixed(2)}`));
 
-  // costSavedBps: savings vs the most expensive processor in basis points
   const costSavedUsd = tx.costSavedBps > 0
     ? (tx.costSavedBps / 10000) * (tx.amount / 100)
     : 0;
-  if (costSavedUsd > 0.005) {
+  if (tx.status === 'success' && costSavedUsd > 0.005) {
     const tag = document.createElement('span');
     tag.className = 'cost-saved-tag';
     tag.textContent = `−$${costSavedUsd.toFixed(2)}`;
@@ -387,12 +389,11 @@ function prependTransaction(tx, animate) {
 
 // ── Metrics ───────────────────────────────────────────────────────────────────
 function handleMetrics(metrics) {
-  setText('m-total', metrics.totalTransactions.toLocaleString());
-
-  const authRateStr = metrics.totalTransactions > 0
+  setText('m-total',     metrics.totalTransactions.toLocaleString());
+  setText('m-auth-rate', metrics.totalTransactions > 0
     ? (metrics.authRate * 100).toFixed(1) + '%'
-    : '—';
-  setText('m-auth-rate', authRateStr);
+    : '—');
+  setText('m-declined',  metrics.declinedTransactions.toLocaleString());
   setText('m-failed',    metrics.failedTransactions.toLocaleString());
   setText('m-cost-saved', `$${metrics.totalCostSavedUsd.toFixed(2)}`);
   setText('m-latency',   `${metrics.avgLatencyMs}ms`);
@@ -404,9 +405,8 @@ function handleMetrics(metrics) {
 // ── Auth rate trend chart ─────────────────────────────────────────────────────
 /**
  * SVG coordinate system (viewBox 0 0 500 120):
- *   Chart left=30, top=8, right=492, bottom=100
- *   Width=462, Height=92
- *   85% reference: y = 8 + (1-0.85)*92 = 21.8 ≈ 22  (matches the static SVG line)
+ *   Chart area: left=30, top=8, right=492, bottom=100  →  W=462, H=92
+ *   85% reference line: y = 8 + (1-0.85)*92 = 21.8 ≈ 22
  */
 const CHART = { LEFT: 30, TOP: 8, RIGHT: 492, BOTTOM: 100 };
 
@@ -420,8 +420,8 @@ function renderTrendChart() {
   const svg = document.getElementById('trend-svg');
   if (!svg || trendData.length < 2) return;
 
-  const W = CHART.RIGHT - CHART.LEFT;   // 462
-  const H = CHART.BOTTOM - CHART.TOP;   // 92
+  const W = CHART.RIGHT - CHART.LEFT;
+  const H = CHART.BOTTOM - CHART.TOP;
 
   const xOf = (i) => CHART.LEFT + (i / (TREND_MAX_POINTS - 1)) * W;
   const yOf = (v) => CHART.TOP  + (1 - Math.max(0, Math.min(1, v))) * H;
@@ -430,19 +430,16 @@ function renderTrendChart() {
   const x0  = xOf(0);
   const xN  = xOf(trendData.length - 1);
 
-  // Remove previous dynamic elements
   const prevArea = document.getElementById('trend-area');
   const prevLine = document.getElementById('trend-line');
   if (prevArea) prevArea.remove();
   if (prevLine) prevLine.remove();
 
-  // Area fill (semi-transparent green below the line)
   const area = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
   area.id = 'trend-area';
   area.setAttribute('points', `${x0},${CHART.BOTTOM} ${pts} ${xN},${CHART.BOTTOM}`);
   area.setAttribute('fill', 'rgba(16,185,129,0.12)');
 
-  // Auth rate line
   const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
   line.id = 'trend-line';
   line.setAttribute('points', pts);
@@ -478,7 +475,7 @@ async function saveThresholds() {
   setTimeout(() => msg.classList.add('hidden'), 2000);
 }
 
-// ── Relative timestamps (updated every second) ────────────────────────────────
+// ── Relative timestamps ───────────────────────────────────────────────────────
 function updateTimestamps() {
   document.querySelectorAll('.feed-time[data-ts]').forEach(el => {
     const ts  = parseInt(el.dataset.ts, 10);

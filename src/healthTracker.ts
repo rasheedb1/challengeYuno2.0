@@ -8,8 +8,8 @@ import {
 
 const DEFAULT_CONFIG: ThresholdConfig = {
   windowSizeMs: 15_000,     // 15-second sliding window for fast detection
-  degradedThreshold: 0.92,  // below 92% → degraded  (baseline ~99%, so plenty of margin)
-  downThreshold: 0.75,      // below 75% → down
+  degradedThreshold: 0.92,  // technical availability below 92% → degraded
+  downThreshold: 0.75,      // technical availability below 75% → down
   recentSampleSize: 8,      // also check last 8 events for rapid degradation
   minSamples: 6,            // need at least 6 events before downgrading status
 };
@@ -41,46 +41,53 @@ export class HealthTracker {
       return this.emptyHealth(processorId);
     }
 
-    const successRate = computeSuccessRate(events);
+    const successRate  = computeSuccessRate(events);   // approved / total
+    const declineRate  = countByType(events, 'declined') / total;
+    const errorRate    = countByType(events, 'error') / total;
+    const timeoutRate  = countByType(events, 'timeout') / total;
 
-    // With too few samples, report observed stats but keep status healthy
-    // to avoid false positives from statistical noise on low-traffic windows.
+    // Technical availability: how often does the processor respond correctly?
+    // Declined = valid bank response (not a technical fault). Error/timeout = technical fault.
+    const technicalAvailability = 1 - errorRate - timeoutRate;
+
+    // With too few samples, keep status healthy to avoid false positives from noise.
     if (total < this.config.minSamples) {
       return {
         processorId,
         successRate,
-        errorRate: countByType(events, 'error') / total,
-        timeoutRate: countByType(events, 'timeout') / total,
+        declineRate,
+        errorRate,
+        timeoutRate,
         avgLatencyMs: Math.round(computeAvgLatency(events)),
         totalRequests: total,
         status: 'healthy',
-        score: computeScore(successRate, computeAvgLatency(events)),
+        score: computeScore(technicalAvailability, computeAvgLatency(events)),
         lastUpdated: Date.now(),
       };
     }
-    const errorRate = countByType(events, 'error') / total;
-    const timeoutRate = countByType(events, 'timeout') / total;
+
     const avgLatencyMs = computeAvgLatency(events);
 
     // Fast-detection: also evaluate only the most recent N events
     const recentEvents = events.slice(-this.config.recentSampleSize);
-    const recentSuccessRate =
+    const recentTechnicalAvailability =
       recentEvents.length >= Math.floor(this.config.recentSampleSize / 2)
-        ? computeSuccessRate(recentEvents)
+        ? computeTechnicalAvailability(recentEvents)
         : null;
 
     // Use the worse of full-window vs recent to detect degradation quickly
-    const effectiveRate =
-      recentSuccessRate !== null
-        ? Math.min(successRate, recentSuccessRate)
-        : successRate;
+    const effectiveAvailability =
+      recentTechnicalAvailability !== null
+        ? Math.min(technicalAvailability, recentTechnicalAvailability)
+        : technicalAvailability;
 
-    const status = this.computeStatus(effectiveRate);
-    const score = computeScore(effectiveRate, avgLatencyMs);
+    const status = this.computeStatus(effectiveAvailability);
+    const score  = computeScore(effectiveAvailability, avgLatencyMs);
 
     return {
       processorId,
       successRate,
+      declineRate,
       errorRate,
       timeoutRate,
       avgLatencyMs: Math.round(avgLatencyMs),
@@ -111,9 +118,9 @@ export class HealthTracker {
     this.windows.set(processorId, pruned);
   }
 
-  private computeStatus(successRate: number): ProcessorStatus {
-    if (successRate >= this.config.degradedThreshold) return 'healthy';
-    if (successRate >= this.config.downThreshold) return 'degraded';
+  private computeStatus(technicalAvailability: number): ProcessorStatus {
+    if (technicalAvailability >= this.config.degradedThreshold) return 'healthy';
+    if (technicalAvailability >= this.config.downThreshold) return 'degraded';
     return 'down';
   }
 
@@ -121,6 +128,7 @@ export class HealthTracker {
     return {
       processorId,
       successRate: 1,
+      declineRate: 0,
       errorRate: 0,
       timeoutRate: 0,
       avgLatencyMs: 0,
@@ -141,14 +149,21 @@ function computeSuccessRate(events: WindowEvent[]): number {
   return countByType(events, 'success') / events.length;
 }
 
+/** Technical availability: fraction of events that are NOT errors or timeouts. */
+function computeTechnicalAvailability(events: WindowEvent[]): number {
+  if (events.length === 0) return 1;
+  const failed = countByType(events, 'error') + countByType(events, 'timeout');
+  return 1 - failed / events.length;
+}
+
 function computeAvgLatency(events: WindowEvent[]): number {
   if (events.length === 0) return 0;
   return events.reduce((sum, e) => sum + e.latencyMs, 0) / events.length;
 }
 
-function computeScore(successRate: number, avgLatencyMs: number): number {
-  // 70% weight on success rate, 30% on latency (100ms = full, 3000ms = 0)
-  const successScore = successRate * 70;
+function computeScore(technicalAvailability: number, avgLatencyMs: number): number {
+  // 70% weight on technical availability, 30% on latency (100ms = full, 3000ms = 0)
+  const availabilityScore = technicalAvailability * 70;
   const latencyScore = Math.max(0, 30 * (1 - avgLatencyMs / 3000));
-  return Math.round(Math.min(100, successScore + latencyScore));
+  return Math.round(Math.min(100, availabilityScore + latencyScore));
 }

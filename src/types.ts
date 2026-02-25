@@ -1,6 +1,6 @@
 export type ProcessorStatus = 'healthy' | 'degraded' | 'down';
 
-export type EventType = 'success' | 'error' | 'timeout';
+export type EventType = 'success' | 'declined' | 'error' | 'timeout';
 
 export interface ProcessorConfig {
   id: string;
@@ -17,7 +17,8 @@ export interface WindowEvent {
 
 export interface ProcessorHealth {
   processorId: string;
-  successRate: number;
+  successRate: number;   // approved / total  (auth rate for this processor)
+  declineRate: number;   // declined / total  (business rejections — not a technical fault)
   errorRate: number;
   timeoutRate: number;
   avgLatencyMs: number;
@@ -40,10 +41,11 @@ export interface Transaction {
 
 export interface Metrics {
   totalTransactions: number;
-  successfulTransactions: number;
-  failedTransactions: number;
-  authRate: number;           // successfulTransactions / totalTransactions (0–1)
-  totalCostSavedUsd: number;  // total USD saved via cost-aware routing
+  successfulTransactions: number;  // approved only
+  declinedTransactions: number;    // business rejections
+  failedTransactions: number;      // errors + timeouts (technical failures)
+  authRate: number;                // successfulTransactions / totalTransactions (0–1)
+  totalCostSavedUsd: number;       // total USD saved via cost-aware routing
   avgLatencyMs: number;
   transactionsPerSecond: number;
 }
