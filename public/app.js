@@ -9,7 +9,11 @@ let processorConfigs = [];
 let processorDegraded = {};   // { id: bool }
 let processorOverride = {};   // { id: bool|null }
 let healthMap = {};           // { id: ProcessorHealth }
-const MAX_FEED_ITEMS = 100;
+
+// ── Transaction history (all received, for time-range filter) ─────────────────
+const MAX_ALL_TRANSACTIONS = 2000;
+const allTransactions = [];   // newest first
+let feedFilter = 0;           // 0 = all, otherwise cutoff ms from now
 
 // ── Auth rate trend chart state ────────────────────────────────────────────────
 const TREND_MAX_POINTS = 60;
@@ -50,6 +54,7 @@ function handleInit(payload) {
   });
 
   buildProcessorGrid(processorConfigs);
+  buildRoutingDistribution(processorConfigs);
   handleHealth(payload.health);
 
   const cfg = payload.thresholds;
@@ -57,8 +62,15 @@ function handleInit(payload) {
   setInputValue('cfg-degraded', Math.round(cfg.degradedThreshold * 100));
   setInputValue('cfg-down',     Math.round(cfg.downThreshold * 100));
 
-  // Load seed transactions (newest first from server, reverse to prepend correctly)
-  payload.transactions.slice().reverse().forEach(tx => prependTransaction(tx, false));
+  // Load seed transactions into history (newest first from server)
+  payload.transactions.forEach(tx => {
+    allTransactions.push(tx);
+  });
+  if (allTransactions.length > MAX_ALL_TRANSACTIONS) {
+    allTransactions.splice(MAX_ALL_TRANSACTIONS);
+  }
+  renderFeed();
+
   handleMetrics(payload.metrics);
   handleSimulation(payload.simulation);
 }
@@ -219,12 +231,85 @@ function makeStatCell(label, id, initial) {
   return cell;
 }
 
+// ── Routing distribution chart ────────────────────────────────────────────────
+/**
+ * Build static skeleton rows for each processor.
+ * Called once in handleInit.
+ */
+function buildRoutingDistribution(processors) {
+  const container = document.getElementById('routing-rows');
+  container.textContent = '';
+
+  processors.forEach(p => {
+    const safeId = p.id.replace(/[^a-z0-9_-]/gi, '');
+
+    const row = document.createElement('div');
+    row.className = 'routing-row';
+    row.id = `routing-row-${safeId}`;
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'routing-name';
+    nameEl.textContent = p.name;
+
+    const track = document.createElement('div');
+    track.className = 'routing-bar-track';
+
+    const fill = document.createElement('div');
+    fill.className = 'routing-bar-fill status-healthy';
+    fill.id = `routing-fill-${safeId}`;
+    fill.style.width = '0%';
+    track.appendChild(fill);
+
+    const pct = document.createElement('div');
+    pct.className = 'routing-pct';
+    pct.id = `routing-pct-${safeId}`;
+    pct.textContent = '—';
+
+    const count = document.createElement('div');
+    count.className = 'routing-count';
+    count.id = `routing-count-${safeId}`;
+    count.textContent = '0 req';
+
+    row.appendChild(nameEl);
+    row.appendChild(track);
+    row.appendChild(pct);
+    row.appendChild(count);
+    container.appendChild(row);
+  });
+}
+
+/**
+ * Update routing distribution bars based on latest health data.
+ * Called from handleHealth after every transaction.
+ */
+function updateRoutingDistribution(healthList) {
+  const total = healthList.reduce((sum, h) => sum + h.totalRequests, 0);
+
+  healthList.forEach(h => {
+    const safeId = h.processorId.replace(/[^a-z0-9_-]/gi, '');
+    const pct = total > 0 ? (h.totalRequests / total) * 100 : 0;
+
+    const fill = document.getElementById(`routing-fill-${safeId}`);
+    if (fill) {
+      fill.style.width = `${pct.toFixed(1)}%`;
+      fill.className = `routing-bar-fill status-${h.status}`;
+    }
+
+    const pctEl = document.getElementById(`routing-pct-${safeId}`);
+    if (pctEl) pctEl.textContent = total > 0 ? `${Math.round(pct)}%` : '—';
+
+    const countEl = document.getElementById(`routing-count-${safeId}`);
+    if (countEl) countEl.textContent = `${h.totalRequests} req`;
+  });
+}
+
 // ── Health updates ────────────────────────────────────────────────────────────
 function handleHealth(healthList) {
   healthList.forEach(h => {
     healthMap[h.processorId] = h;
     updateProcessorCard(h);
   });
+  updateRoutingDistribution(healthList);
 }
 
 function updateProcessorCard(h) {
@@ -312,20 +397,81 @@ async function toggleOverride(id, enabled) {
 }
 
 // ── Transaction feed ──────────────────────────────────────────────────────────
+
+/** Receive a live transaction, store it, and render it if within filter. */
 function handleTransaction(tx) {
-  prependTransaction(tx, true);
+  // Insert newest-first
+  allTransactions.unshift(tx);
+  if (allTransactions.length > MAX_ALL_TRANSACTIONS) {
+    allTransactions.pop();
+  }
+
+  // Only add to DOM if it passes the current time filter
+  if (feedFilter === 0 || (Date.now() - tx.timestamp) <= feedFilter) {
+    prependFeedItem(tx, true);
+  }
+}
+
+/**
+ * Re-render the feed from allTransactions applying the current time filter.
+ * Used on init and when the user changes the filter.
+ */
+function renderFeed() {
+  const feed = document.getElementById('tx-feed');
+  feed.textContent = '';
+
+  const cutoff = feedFilter > 0 ? Date.now() - feedFilter : 0;
+  const visible = feedFilter > 0
+    ? allTransactions.filter(tx => tx.timestamp >= cutoff)
+    : allTransactions;
+
+  if (visible.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'feed-empty';
+    empty.textContent = feedFilter > 0 ? 'No transactions in this time window.' : 'Waiting for transactions…';
+    feed.appendChild(empty);
+    return;
+  }
+
+  // Render without animation (batch load)
+  visible.forEach(tx => prependFeedItem(tx, false));
+}
+
+/** Set the active time-range filter and re-render the feed. */
+function setFeedFilter(ms) {
+  feedFilter = ms;
+
+  // Update button active states
+  ['filter-all', 'filter-30m', 'filter-15m', 'filter-5m'].forEach(id => {
+    document.getElementById(id).classList.remove('active');
+  });
+  const activeMap = { 0: 'filter-all', 1800000: 'filter-30m', 900000: 'filter-15m', 300000: 'filter-5m' };
+  const activeId = activeMap[ms];
+  if (activeId) document.getElementById(activeId).classList.add('active');
+
+  renderFeed();
 }
 
 /**
  * Build a transaction feed row using DOM API to avoid XSS risks.
- * Status colours: success=green, declined=amber, error=red, timeout=orange
+ * Prepends to the feed container.
  */
-function prependTransaction(tx, animate) {
+function prependFeedItem(tx, animate) {
   const feed = document.getElementById('tx-feed');
 
   const empty = feed.querySelector('.feed-empty');
   if (empty) empty.remove();
 
+  const item = buildFeedItem(tx, animate);
+  feed.insertBefore(item, feed.firstChild);
+
+  // Trim DOM to keep things snappy (keep last 200 visible items)
+  while (feed.children.length > 200) {
+    feed.removeChild(feed.lastChild);
+  }
+}
+
+function buildFeedItem(tx, animate) {
   const item = document.createElement('div');
   item.className = `feed-item ${tx.status}`;
   if (!animate) item.style.animation = 'none';
@@ -347,7 +493,7 @@ function prependTransaction(tx, animate) {
   statusEl.className = `feed-status ${tx.status}`;
   statusEl.textContent = capitalize(tx.status);
 
-  // Amount + cost-saved tag (only on success — fee only charged on approvals)
+  // Amount + cost-saved tag (only on success)
   const amountWrap = document.createElement('div');
   amountWrap.className = 'feed-amount';
   amountWrap.appendChild(document.createTextNode(`$${(tx.amount / 100).toFixed(2)}`));
@@ -380,11 +526,7 @@ function prependTransaction(tx, animate) {
   item.appendChild(latEl);
   item.appendChild(timeEl);
 
-  feed.insertBefore(item, feed.firstChild);
-
-  while (feed.children.length > MAX_FEED_ITEMS) {
-    feed.removeChild(feed.lastChild);
-  }
+  return item;
 }
 
 // ── Metrics ───────────────────────────────────────────────────────────────────

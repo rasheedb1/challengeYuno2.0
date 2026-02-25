@@ -469,3 +469,80 @@ body {
   border-radius: 4px;
   margin-left: 3px;
 }
+
+/* ── Routing distribution ──────────────────────────────────────────────────── */
+.routing-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.routing-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 38px 46px;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.routing-row:last-child { margin-bottom: 0; }
+
+.routing-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.routing-bar-track {
+  height: 14px;
+  background: var(--surface2);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.routing-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width .5s ease;
+  min-width: 2px;
+}
+.routing-bar-fill.status-healthy  { background: var(--healthy); }
+.routing-bar-fill.status-degraded { background: var(--degraded); }
+.routing-bar-fill.status-down     { background: var(--down); }
+
+.routing-pct {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.routing-count {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Feed header with filter buttons ──────────────────────────────────────── */
+.feed-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.feed-filter-btns {
+  display: flex;
+  gap: 4px;
+}
+
+.btn-ghost.active {
+  background: var(--surface2);
+  color: var(--text);
+  border-color: var(--blue);
+}

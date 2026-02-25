@@ -66,6 +66,14 @@
         </div>
       </section>
 
+      <!-- Routing distribution chart -->
+      <section class="routing-section">
+        <h2 class="section-title">Routing Distribution — 15s window</h2>
+        <div id="routing-rows">
+          <!-- Rows injected by JS -->
+        </div>
+      </section>
+
       <!-- Auth rate trend chart -->
       <section class="chart-section">
         <h2 class="section-title">Auth Rate Trend — 60s window</h2>
@@ -126,7 +134,15 @@
     <!-- ── Right column: transaction feed ─────────────────────────────────── -->
     <div class="right-col">
       <section class="feed-section">
-        <h2 class="section-title">Live Transaction Feed</h2>
+        <div class="feed-header">
+          <h2 class="section-title" style="margin-bottom:0">Live Transaction Feed</h2>
+          <div class="feed-filter-btns">
+            <button class="btn btn-sm btn-ghost active" id="filter-all" onclick="setFeedFilter(0)">All</button>
+            <button class="btn btn-sm btn-ghost" id="filter-30m" onclick="setFeedFilter(1800000)">30m</button>
+            <button class="btn btn-sm btn-ghost" id="filter-15m" onclick="setFeedFilter(900000)">15m</button>
+            <button class="btn btn-sm btn-ghost" id="filter-5m"  onclick="setFeedFilter(300000)">5m</button>
+          </div>
+        </div>
         <div class="feed" id="tx-feed">
           <div class="feed-empty">Waiting for transactions…</div>
         </div>
